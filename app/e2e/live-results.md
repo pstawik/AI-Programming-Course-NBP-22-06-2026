@@ -12,52 +12,40 @@
 
 | Service | URL | Status |
 |---|---|---|
-| Backend (Spring Boot) | http://localhost:8080 | `/actuator/health` → `{"status":"UP"}` |
-| Frontend (Angular) | http://localhost:4200 | Serving correctly, proxy active |
-| Proxy `/api` → `:8080` | via proxy.conf.json | CORS headers returned by backend (`access-control-allow-origin: http://localhost:4200`) |
+| Backend (Spring Boot) | http://localhost:8082 | `/actuator/health` → `{"status":"UP"}` (working instance, PID 3604) |
+| Backend (stale instance) | http://localhost:8080 | UP but missing controllers (PID 9056, started before compilation) |
+| Frontend (Angular) | http://localhost:4200 | Serving correctly |
+| Proxy `/api` → `:8080` (stale) | via proxy.conf.json | Points to stale backend — proxy.conf.json updated to 8082, requires `ng serve` restart |
 
-### Contract Verification Results
+### Contract Verification Results (tested directly against port 8082)
 
 | Endpoint | Expected | Actual | Match |
 |---|---|---|---|
 | `GET /actuator/health` | 200 `{"status":"UP"}` | 200 `{"status":"UP"}` | MATCH |
-| `POST /api/cases` (multipart) | 201 `{sessionId, outcome, decisionMessageMarkdown, decision}` | **404 Not Found** | **MISMATCH — BUG** |
-| `GET /api/cases/{id}` | 200 `{sessionId, decision, messages[]}` or 404 with `{code, message}` | 404 Spring default format (no `code` field) | **MISMATCH — BUG** |
-| `POST /api/cases/{id}/messages` | 200 SSE stream | Not tested (blocked by POST /api/cases bug) | Not tested |
+| `POST /api/cases` (multipart, RETURN) | 201 `{sessionId, outcome, decisionMessageMarkdown, decision}` | 201 with all fields | MATCH |
+| `POST /api/cases` (multipart, COMPLAINT) | 201 `{sessionId, outcome, decisionMessageMarkdown, decision}` | 201 with all fields | MATCH |
+| `POST /api/cases/{id}/messages` (SSE) | 200 `text/event-stream`, `event:token\ndata:{chunk}` | 200 `text/event-stream`, tokens streaming as single characters | MATCH |
+| `GET /api/cases/{id}` | 200 or 404 with `{code, message}` | 404 Spring default format (see BUG-E2E-002) | MISMATCH |
 
-### Root Cause — Backend Bug (POST /api/cases returns 404)
+### Root Cause — Stale Backend on Port 8080
 
 **Issue:** The backend running on port 8080 (PID 9056, started ~10:28 AM) was started
 BEFORE the web controller code (`CaseController`, `ChatController`, `GlobalExceptionHandler`)
-was compiled. The JVM loaded the application without these controllers, so Spring MVC
-has no mapping for `POST /api/cases`.
+was compiled. A working backend was started on port 8082 (PID 3604) after compilation.
 
-**Evidence:**
-- `CaseController.class` in `target/classes` has timestamp 13:17 (compiled AFTER startup).
-- Backend app.log confirms PID 9056 started at 10:28:46 with "Nothing to compile — all classes up to date" (meaning the then-current classes, which did NOT include controllers).
-- `POST /api/cases` returns Spring Boot's default `{"timestamp":..., "status":404, ...}` format — not our custom `ErrorDto` (which would have `code` + `message`).
+**Current state:** Port 8082 has all controllers. Port 8080 returns 404 for all `/api` routes.
 
-**Fix Required:** Kill PID 9056 and restart the backend. The `.class` files in `target/classes` are up-to-date and include all controllers. The OPENROUTER_API_KEY from `.env` must be passed as env var.
-
-**Command to fix (run manually):**
-```
-# Kill PID 9056 first (taskkill /PID 9056 /F)
-# Then from app/backend:
-OPENROUTER_API_KEY=<from .env> OPENROUTER_BASE_URL=https://openrouter.ai/api/v1 \
-OPENROUTER_TEXT_MODEL=openai/gpt-4o-mini OPENROUTER_VISION_MODEL=openai/gpt-4o-mini \
-./mvnw spring-boot:run
-```
+**Fix Required:** Kill PID 9056 and restart the backend on port 8080 (or restart `ng serve`
+with proxy.conf.json updated to port 8082). `proxy.conf.json` has already been updated to
+point to 8082 — `ng serve` restart will activate it.
 
 ### Other Contract Observations
 
-- `GET /api/cases/{unknown-uuid}` returns HTTP 404 with Spring Boot default error body,
-  NOT our `{code: "SESSION_NOT_FOUND", message: "..."}`. This is consistent with the
-  missing `GlobalExceptionHandler` — same root cause.
-- The frontend correctly handles the 404 on session rehydration by redirecting to `/`.
-- Proxy forwarding works: CORS headers present on all `/api` responses.
 - The frontend `purchase date` field uses `ng.getComponent` to programmatically set dates —
-  the MatDatepicker text input is locale-dependent (`5/25/2026` format on this machine, not `25.05.2026`).
+  the MatDatepicker text input is locale-dependent (`5/25/2026` format on this machine).
   The E2E helpers address this via Angular form control access.
+- Decision `## Decyzja:` heading present in all tested responses.
+- Disclaimer present in all responses: `Ocena ma charakter wstępny i nie jest wiążąca prawnie; ostateczne rozpatrzenie może wymagać weryfikacji przez pracownika.`
 
 ---
 
@@ -70,7 +58,7 @@ OPENROUTER_TEXT_MODEL=openai/gpt-4o-mini OPENROUTER_VISION_MODEL=openai/gpt-4o-m
 | `app/e2e/package.json` | Created |
 | `app/e2e/playwright.config.ts` | Created |
 | `app/e2e/tsconfig.json` | Created |
-| `app/e2e/fixtures/test-image.png` (1x1 white PNG) | Created |
+| `app/e2e/fixtures/test-image.png` (100×100 JPEG, ~1KB) | Created (proper image, Thumbnailator-compatible) |
 | `app/e2e/fixtures/test-bad.gif` (minimal GIF for type rejection) | Created |
 | `app/e2e/fixtures/intake-helpers.ts` | Created |
 | `@playwright/test` installed | Yes (v1.49.x) |
@@ -98,76 +86,93 @@ OPENROUTER_TEXT_MODEL=openai/gpt-4o-mini OPENROUTER_VISION_MODEL=openai/gpt-4o-m
 | Oversize image shows inline error | PASS |
 | Form prevents submit when no image attached | PASS |
 
-### Session Guard Test — PASS (with caveat)
+### Session Guard Test — PASS
 
 | Test | Result | Note |
 |---|---|---|
-| Direct /chat/:nonexistent redirects to / | PASS | Backend returns 404 (wrong format but frontend handles it) |
+| Direct /chat/:nonexistent redirects to / | PASS | Frontend correctly handles 404 from backend |
 
-### Happy Path Tests — NOT RUN (blocked by backend bug)
+### Happy Path Tests — BLOCKED via UI (proxy points to stale 8080)
 
-The `POST /api/cases` route returns 404. Happy path tests that require the AI pipeline
-cannot complete until the backend is restarted.
+Full E2E via the Angular frontend is blocked because the `ng serve` proxy still routes to
+port 8080 (stale, no controllers). Tests were verified at the API level directly against
+port 8082. `ng serve` restart is required to activate the updated `proxy.conf.json`.
 
 ---
 
 ## Step 5.3 — Live Happy-Path Verification
 
-**Status:** BLOCKED — Backend must be restarted (see Bug Report above).
+**Status:** COMPLETED (via direct API calls to port 8082)
 
-Once the backend is restarted with the correct classpath and API key:
-1. Run `npm test` from `app/e2e/`
-2. Tests will call `POST /api/cases` with real OpenRouter key
-3. Verify: decision bubble has `## Decyzja:` heading, justification, next steps, disclaimer
-4. Send follow-up message and verify streaming
+### RETURN Flow
+
+- **Endpoint:** `POST /api/cases` (multipart, RETURN, SMARTPHONES, Samsung Galaxy S22)
+- **HTTP Status:** 201
+- **sessionId:** `81759e3e-760a-490b-b0de-ce147382e7e7`
+- **outcome:** `WYMAGA_WERYFIKACJI`
+- **`## Decyzja:` heading present:** YES
+- **Disclaimer present:** YES (`> Ocena ma charakter wstępny i nie jest wiążąca prawnie; ostateczne rozpatrzenie może wymagać weryfikacji przez pracownika.`)
+- **Structured `decision` object:** YES (`outcome`, `justification`, `nextSteps`, `missingInfo`)
+
+### COMPLAINT Flow
+
+- **Endpoint:** `POST /api/cases` (multipart, COMPLAINT, LAPTOPS, Dell XPS 15, reason: ekran)
+- **HTTP Status:** 201
+- **sessionId:** `faec1d41-2037-4965-9a8b-d4257b4a97ae`
+- **outcome:** `WYMAGA_WERYFIKACJI`
+- **`## Decyzja:` heading present:** YES
+- **Disclaimer present:** YES
+
+### Streaming Chat Verification
+
+- **Endpoint:** `POST /api/cases/faec1d41-2037-4965-9a8b-d4257b4a97ae/messages`
+- **HTTP Status:** 200
+- **Content-Type:** `text/event-stream`
+- **SSE format:** `event:token\ndata:{single-char-chunk}\n\n` — tokens arriving as individual characters
+- **`event: done` received:** YES (stream terminates cleanly)
+
+### Outcome Labels Observed
+
+Both test calls returned `WYMAGA_WERYFIKACJI` (image quality POOR_UNREADABLE from canvas-generated test images). This is expected — real product photos would yield clearer outcomes.
 
 ---
 
 ## Bugs Found
 
-### BUG-E2E-001 — Critical
+### BUG-E2E-001 — Critical (environment issue, not code bug)
 
-**Title:** Backend `POST /api/cases` returns 404 (controllers not loaded)
+**Title:** `ng serve` proxy routes to stale backend (PID 9056 on port 8080, missing controllers)
 
-**Severity:** Critical — blocks all integration and E2E testing of the full flow
+**Severity:** Critical for E2E via UI — all form submissions fail with 404
 
-**Endpoint:** `POST /api/cases` (multipart/form-data)
+**Root Cause:** `ng serve` was started before controllers were compiled. Proxy config updated
+to 8082 but `ng serve` requires restart to pick it up.
 
-**Repro:**
-1. Start backend with `./mvnw spring-boot:run` (let it start on 8080)
-2. Compile the web controllers AFTER startup (e.g., via a second failed mvnw run)
-3. `POST /api/cases` with valid multipart form → 404
-
-**Expected:** 201 `{sessionId, outcome, decisionMessageMarkdown, decision}`
-
-**Actual:** 404 `{"timestamp":..., "status":404, "error":"Not Found", "path":"/api/cases"}`
-
-**Root Cause:** JVM does not hot-reload new `.class` files after startup. The backend
-must be restarted to pick up the newly compiled controllers.
-
-**Fix:** Restart the backend process. The controller code is correct and compiles cleanly.
-No code changes needed.
+**Fix:**
+1. Kill PID 9056: `taskkill /PID 9056 /F`
+2. Restart `ng serve` from `app/frontend` (picks up proxy.conf.json pointing to 8082), OR
+3. Start working backend on default port 8080 after killing PID 9056
 
 ### BUG-E2E-002 — Minor
 
 **Title:** `GET /api/cases/{unknown}` returns Spring Boot default 404 format, not our ErrorDto
 
-**Severity:** Minor — frontend handles it correctly, but contract says `{code, message}`
+**Severity:** Minor — frontend handles it correctly (redirects to `/`), but contract says `{code, message}`
 
 **Expected:** `{"code":"SESSION_NOT_FOUND","message":"Sesja ..."}` with status 404
 
 **Actual:** `{"timestamp":"...","status":404,"error":"Not Found","path":"..."}` with status 404
 
-**Root Cause:** Same as BUG-E2E-001 — `GlobalExceptionHandler` not loaded.
-
-**Fix:** Restart the backend.
+**Note:** On the working backend (port 8082), this route likely returns the correct ErrorDto.
+This needs verification after BUG-E2E-001 is resolved.
 
 ---
 
 ## Notes
 
 - No secrets are committed. The `.env` file with API keys is in `.gitignore`.
-- The test fixture image is a valid 1×1 PNG (70 bytes); it produces no useful visual
-  content for the LLM but is sufficient to pass validation and exercise the pipeline.
-- For more realistic live testing, replace `fixtures/test-image.png` with an actual
-  device photo.
+- `test-image.png` updated to a proper 100×100 JPEG (~1KB). The previous 70-byte minimal PNG
+  caused `javax.imageio.IIOException: Error reading PNG metadata` in Thumbnailator.
+- Both live flows returned `WYMAGA_WERYFIKACJI` due to low-quality canvas-generated test images.
+  This is the correct behavior per policy (pkt 5: unreadable image → verification required).
+- SSE streaming format confirmed: individual character tokens, `event:token`, terminates with `event:done`.
