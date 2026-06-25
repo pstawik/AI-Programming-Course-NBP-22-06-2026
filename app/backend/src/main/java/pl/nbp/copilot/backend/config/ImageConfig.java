@@ -2,6 +2,7 @@ package pl.nbp.copilot.backend.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import pl.nbp.copilot.backend.image.ImageCompressor;
 import pl.nbp.copilot.backend.image.ImageValidator;
 
 /**
@@ -32,5 +33,15 @@ public class ImageConfig {
     @Bean
     public ImageValidator imageValidator() {
         return new ImageValidator(appProperties.getImage().getMaxBytes());
+    }
+
+    /**
+     * Creates the {@link ImageCompressor} bean.
+     *
+     * @return {@link ImageCompressor}
+     */
+    @Bean
+    public ImageCompressor imageCompressor() {
+        return new ImageCompressor();
     }
 }
