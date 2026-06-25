@@ -3,7 +3,14 @@
 # Usage: cd app\backend && .\run-dev.ps1
 # Never hardcodes secrets — reads them from .env which is gitignored.
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
+# Find the main worktree root (works from both main repo and git worktrees).
+# git rev-parse --git-common-dir returns the common .git dir; its parent is the main repo root.
+$gitCommonDir = & git -C $PSScriptRoot rev-parse --git-common-dir 2>$null
+if ($gitCommonDir) {
+    $repoRoot = Resolve-Path (Join-Path $gitCommonDir "..")
+} else {
+    $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
+}
 $envFile  = Join-Path $repoRoot ".env"
 
 if (-not (Test-Path $envFile)) {

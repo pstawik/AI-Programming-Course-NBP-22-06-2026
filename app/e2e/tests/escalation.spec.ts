@@ -97,7 +97,8 @@ test.describe('WYMAGA_WERYFIKACJI outcome — UI renders correctly', () => {
     expect(labelFound).toBe(true);
 
     // Disclaimer always present regardless of outcome (AC-16)
-    await expect(page.getByText('Ocena ma charakter wstępny')).toBeVisible();
+    // Use .first() — strict mode: text may appear in multiple rendered markdown paragraphs
+    await expect(page.getByText('Ocena ma charakter wstępny').first()).toBeVisible();
   });
 });
 

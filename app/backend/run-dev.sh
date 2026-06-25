@@ -7,8 +7,15 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-ENV_FILE="$REPO_ROOT/.env"
+# Find the main worktree root (works from both main repo and git worktrees)
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+# For git worktrees, the .env lives in the main repo root (one level above .git)
+if [ -n "$REPO_ROOT" ]; then
+  MAIN_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --git-common-dir 2>/dev/null | xargs dirname 2>/dev/null || echo "$REPO_ROOT")"
+else
+  MAIN_ROOT="$SCRIPT_DIR/../../.."
+fi
+ENV_FILE="$MAIN_ROOT/.env"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "ERROR: .env not found at $ENV_FILE. Copy .env.example and fill in your keys." >&2

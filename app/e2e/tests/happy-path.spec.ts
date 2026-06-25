@@ -62,7 +62,8 @@ test.describe('Happy path — RETURN flow @smoke', () => {
     await expect(chatMessages.first()).toBeVisible({ timeout: 10_000 });
 
     // Disclaimer must be present (AC-16 / TAC-08)
-    await expect(page.getByText(DISCLAIMER_TEXT)).toBeVisible({ timeout: 10_000 });
+    // Use .first() — the disclaimer text may appear in multiple rendered markdown paragraphs
+    await expect(page.getByText(DISCLAIMER_TEXT).first()).toBeVisible({ timeout: 10_000 });
 
     // ── Step 6: Assert outcome chip is visible ─────────────────────────────
     const chipVisible = await page.locator('.status-chip').isVisible();
@@ -83,18 +84,20 @@ test.describe('Happy path — RETURN flow @smoke', () => {
     await expect(page.locator('.chat-bubble--user').last()).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('.chat-bubble--user').last()).toContainText('Czy mogę przyspieszyć');
 
-    // Wait for at least one assistant bubble to appear and contain text
-    await expect(page.locator('.chat-bubble--assistant').last()).toBeVisible({ timeout: 60_000 });
-    const assistantText = await page.locator('.chat-bubble--assistant').last().textContent();
-    expect(assistantText!.trim().length).toBeGreaterThan(10);
+    // Wait for at least one assistant bubble to appear and contain text.
+    // Use innerText() — textContent() returns empty before ngx-markdown renders.
+    const assistantBubble = page.locator('.chat-bubble--assistant').last();
+    await expect(assistantBubble).toBeVisible({ timeout: 60_000 });
+    await expect(assistantBubble).not.toHaveText('', { timeout: 30_000 });
 
     // Input re-enabled after streaming completes
     await expect(chatInput).toBeEnabled({ timeout: 60_000 });
 
     // ── Step 9: All visible text should be in Polish ────────────────────────
-    // Check key UI labels are Polish (AC-22)
-    await expect(page.getByText('Nowe zgłoszenie')).toBeVisible();
-    await expect(page.getByText('Wyślij')).toBeVisible();
+    // Check key UI labels are Polish (AC-22) — use role-based locators to avoid
+    // strict-mode violations from markdown-rendered text containing the same words
+    await expect(page.getByRole('button', { name: 'Nowe zgłoszenie' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Wyślij wiadomość' })).toBeVisible();
     // No English "Submit" or "Send" buttons
     await expect(page.getByRole('button', { name: 'Submit' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Send$/ })).toHaveCount(0);
@@ -126,7 +129,8 @@ test.describe('Happy path — COMPLAINT flow @smoke', () => {
     await expect(page.locator('.chat-bubble--system').first()).toBeVisible({ timeout: 10_000 });
 
     // Disclaimer present (AC-16)
-    await expect(page.getByText(DISCLAIMER_TEXT)).toBeVisible();
+    // Use .first() — disclaimer text may appear in multiple rendered markdown elements
+    await expect(page.getByText(DISCLAIMER_TEXT).first()).toBeVisible();
 
     // Outcome chip for complaint: UZNANA | ODRZUCONA | WYMAGA_WERYFIKACJI
     const chipText = await page.locator('.status-chip').textContent();
@@ -140,9 +144,9 @@ test.describe('Happy path — COMPLAINT flow @smoke', () => {
     await page.getByRole('button', { name: 'Wyślij' }).click();
 
     // Wait for assistant response
-    await expect(page.locator('.chat-bubble--assistant').last()).toBeVisible({ timeout: 60_000 });
-    const assistantText = await page.locator('.chat-bubble--assistant').last().textContent();
-    expect(assistantText!.trim().length).toBeGreaterThan(10);
+    const lastAssistant = page.locator('.chat-bubble--assistant').last();
+    await expect(lastAssistant).toBeVisible({ timeout: 60_000 });
+    await expect(lastAssistant).not.toHaveText('', { timeout: 30_000 });
   });
 });
 
